@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="MiniMax Voice">
+  <defs>
+    <linearGradient id="mmv-g" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#2f7de1"/>
+      <stop offset="1" stop-color="#1450a8"/>
+    </linearGradient>
+  </defs>
+  <rect x="2" y="2" width="60" height="60" rx="16" fill="url(#mmv-g)"/>
+  <rect x="26" y="14" width="12" height="24" rx="6" fill="#ffffff"/>
+  <path d="M20 34a12 12 0 0 0 24 0" fill="none" stroke="#ffffff" stroke-width="3.2" stroke-linecap="round"/>
+  <path d="M32 46v6" fill="none" stroke="#ffffff" stroke-width="3.2" stroke-linecap="round"/>
+  <path d="M24 52h16" fill="none" stroke="#ffffff" stroke-width="3.2" stroke-linecap="round"/>
+  <path d="M14 30v8M50 30v8" fill="none" stroke="#bfe0ff" stroke-width="2.6" stroke-linecap="round" opacity="0.9"/>
+</svg>
