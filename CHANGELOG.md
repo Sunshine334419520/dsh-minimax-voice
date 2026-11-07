@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.2.1 — 2026-11-07
+
+### Fixed
+
+- **`/mmvoice/api` now passes the host trust fence.** Every request goes through `connection.requestRejection()` (Host/Origin checks plus an authenticated browser session or API token) and is answered with `401`/`403` when it fails; if the `connection` service is unavailable, only loopback same-origin requests are accepted. Previously the local routes were unauthenticated, so a page on another origin could clone voices, synthesize audio or change the key.
+
+### Added
+
+- Marketplace badge in both READMEs, linking to the plugin's page in [awesome-dsh-plugin](https://awesome-dsh-plugin.com), the catalog behind the DSH plugin market.
+
 ## 0.2.0 — 2026-11-07
 
 ### Added

@@ -1,6 +1,6 @@
 {
   "name": "dsh-minimax-voice",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Voice cloning, text-to-speech and speech-to-text for DeepSeek Harness, powered by MiniMax · DeepSeek Harness 的 MiniMax 音色复刻 / 文本转音频 / 语音转文字插件",
   "type": "module",
   "license": "MIT",

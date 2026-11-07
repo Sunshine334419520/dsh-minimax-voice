@@ -12,6 +12,7 @@
 
 [![npm](https://img.shields.io/npm/v/dsh-minimax-voice.svg?label=npm)](https://www.npmjs.com/package/dsh-minimax-voice)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Awesome DSH Plugin](https://awesome-dsh-plugin.com/badge.svg)](https://awesome-dsh-plugin.com/p/Sunshine334419520/dsh-minimax-voice/)
 [![DSH Plugin](https://img.shields.io/badge/DSH-Plugin-0f766e.svg)](https://github.com/deepseek-ai/deepseek-harness)
 [![Node.js 22+](https://img.shields.io/badge/Node.js-22%2B-339933.svg?logo=node.js&logoColor=white)](https://nodejs.org/)
 
@@ -206,6 +207,10 @@ Check [MiniMax pricing](https://www.minimax.io/price) for current numbers. The p
 - Audio and text are sent to MiniMax to do the work; nothing else leaves the machine.
 - `remove()` deletes the local registry entry and preview only. Delete on MiniMax's side from the console if you also want the voice gone there.
 
+## Local API security
+
+`/mmvoice/api` can read the API key, write audio files and trigger billed calls, so every request passes the harness trust fence: [`connection.requestRejection()`](https://github.com/deepseek-ai/deepseek-harness) checks the Host/Origin pair (DNS rebinding) and requires an authenticated browser session or API token. A request that fails is answered with `401` or `403`. If the `connection` service is unavailable, only loopback, same-origin requests are accepted. Another website therefore cannot reach these routes to spend your MiniMax balance or swap the key.
+
 ## Troubleshooting
 
 | Symptom | Fix |
@@ -213,6 +218,7 @@ Check [MiniMax pricing](https://www.minimax.io/price) for current numbers. The p
 | `configured: false` | No key found; save one in the panel or export `MINIMAX_API_KEY` |
 | Panel missing after install | Toggle the plugin off/on in **Plugins**, or restart the app |
 | `mmvoice/api/status` returns 404 | Plugin is not loaded in this profile — check `dsh plugin --profile <name> list` |
+| `mmvoice/api/*` returns 401 | No authenticated session for that request; open the panel from the harness UI (the routes are not open to other origins) |
 | New voice shows `未激活` | Expected. It is never been synthesized yet, so the fee is not paid |
 | Clone fails with 400 | Sample too short/long/quiet, or the account has no voice-cloning permission |
 | Transcription returns empty text | Language hint conflicts with the audio, or the file is mostly music |

@@ -32,6 +32,60 @@ const DEFAULT_PREVIEW_TEXT = '你好，这是复刻音色的试听效果，听�
 const MAX_BODY_BYTES = 24 * 1024 * 1024
 const ROUTE_PREFIX = '/mmvoice/api'
 
+/* ------------------------------------------------------------ trust fence */
+
+/**
+ * `/mmvoice/api` 能读写 API Key、音色样本、生成的音频，并会触发计费调用，
+ * 所以它必须接宿主的浏览器认证，而不是"只监听回环所以安全"。
+ * dsh 的 connection 服务提供 `requestRejection({ headers }): 401 | 403 | undefined`，
+ * 它同时做 Host/Origin 校验（防 DNS 重绑定）和浏览器会话认证。
+ * 拿不到该服务时退化为只接受回环地址的同源请求（fail closed）。
+ */
+function serviceOf(ctx, name) {
+  try {
+    return ctx.get(name)
+  } catch {
+    return undefined
+  }
+}
+
+function isLoopbackRequest(req) {
+  const host = String((req && req.headers && req.headers.host) || '').toLowerCase()
+  const address = String((req && req.socket && req.socket.remoteAddress) || '')
+  const hostOk = /^(127\.0\.0\.1|localhost|\[::1\])(:\d+)?$/.test(host)
+  const peerOk =
+    address === '' || address === '127.0.0.1' || address === '::1' || address === '::ffff:127.0.0.1'
+  return hostOk && peerOk
+}
+
+function trustRejection(ctx, req) {
+  const connection = serviceOf(ctx, 'connection')
+  if (connection && typeof connection.requestRejection === 'function') {
+    try {
+      const code = connection.requestRejection(req)
+      if (code === undefined) return 0
+      return typeof code === 'number' ? code : 403
+    } catch {
+      return 403
+    }
+  }
+  return isLoopbackRequest(req) ? 0 : 403
+}
+
+function denyRequest(res, status) {
+  try {
+    const body = JSON.stringify({ error: status === 401 ? 'unauthorized' : 'forbidden' })
+    res.writeHead(status, {
+      'content-type': 'application/json; charset=utf-8',
+      'content-length': String(Buffer.byteLength(body)),
+      'cache-control': 'no-store',
+    })
+    res.end(body)
+  } catch {
+    /* the connection is already gone */
+  }
+}
+
 /* ------------------------------------------------------------------ utils */
 
 function text(value) {
@@ -958,8 +1012,16 @@ export function apply(ctx, config = {}) {
   const claimRoute = (webServer) => {
     if (routeRegistered || !webServer) return
     routeRegistered = true
+    const handler = (req, res) => {
+      const rejection = trustRejection(ctx, req)
+      if (rejection) {
+        denyRequest(res, rejection)
+        return
+      }
+      void voice.handleHttp(req, res)
+    }
     ctx.effect(
-      () => webServer.register({ kind: 'prefix', path: ROUTE_PREFIX, handler: (req, res) => void voice.handleHttp(req, res) }),
+      () => webServer.register({ kind: 'prefix', path: ROUTE_PREFIX, handler }),
       'minimax-voice: http route',
     )
   }

@@ -12,6 +12,7 @@
 
 [![npm](https://img.shields.io/npm/v/dsh-minimax-voice.svg?label=npm)](https://www.npmjs.com/package/dsh-minimax-voice)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Awesome DSH Plugin](https://awesome-dsh-plugin.com/badge.svg)](https://awesome-dsh-plugin.com/p/Sunshine334419520/dsh-minimax-voice/)
 [![DSH Plugin](https://img.shields.io/badge/DSH-Plugin-0f766e.svg)](https://github.com/deepseek-ai/deepseek-harness)
 [![Node.js 22+](https://img.shields.io/badge/Node.js-22%2B-339933.svg?logo=node.js&logoColor=white)](https://nodejs.org/)
 
@@ -206,6 +207,10 @@ export function apply(ctx) {
 - 音频和文本会发给 MiniMax 完成处理，其余数据不出本机。
 - `remove()` 只删本地注册表和试听文件；要连账号侧一起删，请去 MiniMax 控制台。
 
+## 本地接口安全
+
+`/mmvoice/api` 能读 API Key、写音频文件、触发计费调用，所以每个请求都要过宿主的信任栅栏：[`connection.requestRejection()`](https://github.com/deepseek-ai/deepseek-harness) 会校验 Host/Origin（防 DNS 重绑定），并要求已认证的浏览器会话或 API 令牌；不通过就返回 `401` 或 `403`。拿不到 `connection` 服务时，只接受回环地址的同源请求。别的网页因此够不到这些接口，无法花你的 MiniMax 余额或换掉 Key。
+
 ## 常见问题
 
 | 现象 | 处理 |
@@ -213,6 +218,7 @@ export function apply(ctx) {
 | `configured: false` | 没找到 Key，去面板保存或导出 `MINIMAX_API_KEY` |
 | 装完设置页没出现 | 在「插件」里关掉再打开，或重启应用 |
 | `/mmvoice/api/status` 返回 404 | 这个 profile 没加载插件，`dsh plugin --profile <name> list` 看看 |
+| `/mmvoice/api/*` 返回 401 | 该请求没有已认证的会话；从 harness 界面里打开面板使用（接口不对其他来源开放） |
 | 新音色显示 `未激活` | 正常。还没合成过，所以那 9.9 元也没收 |
 | 复刻报 400 | 样本太短 / 太长 / 太安静，或账号没开通复刻权限 |
 | 转写结果为空 | 语种提示与音频不符，或者文件基本是纯音乐 |
