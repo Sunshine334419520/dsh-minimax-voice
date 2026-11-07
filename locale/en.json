@@ -1,6 +1,6 @@
 {
   "meta": {
     "title": "MiniMax Voice",
-    "description": "Clone a voice from a short sample, keep its voice_id, and turn text into audio with it; also exposes a minimaxVoice service for other plugins."
+    "description": "Clone a voice from a short sample, keep its voice_id, turn text into audio, and transcribe audio to text; also exposes a minimaxVoice service for other plugins."
   }
 }

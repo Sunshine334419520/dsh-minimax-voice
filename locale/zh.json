@@ -1,6 +1,6 @@
 {
   "meta": {
     "title": "MiniMax 音色",
-    "description": "用一段样本快速复刻音色，保存 voice_id，并用它把文本合成为音频；同时把 minimaxVoice 服务开放给其他插件调用。"
+    "description": "用一段样本快速复刻音色，保存 voice_id，并用它把文本合成为音频；也能把音频转成文字；同时把 minimaxVoice 服务开放给其他插件调用。"
   }
 }

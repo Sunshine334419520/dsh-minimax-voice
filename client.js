@@ -187,6 +187,12 @@ window.__ModuleLoader__.load({
           h('div', { style: { display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' } },
             h('span', { style: s.code }, voice.voiceId),
             h('span', { style: { fontSize: 11, color: tone.label2 } }, voice.model || ''),
+            voice.activated === false
+              ? h('span', {
+                  style: { fontSize: 11, color: tone.label2, opacity: 0.75 },
+                  title: '还没用它正式合成过，9.9 元音色费尚未产生',
+                }, '· 未激活')
+              : null,
           ),
         ),
         h('button', { style: s.link, onClick: toggle, title: '试听' }, playing ? '■ 停止' : '▶ 试听'),
@@ -211,12 +217,19 @@ window.__ModuleLoader__.load({
       const [name, setName] = useState('')
       const [file, setFile] = useState(null)
       const [previewText, setPreviewText] = useState('')
+      const [noiseReduction, setNoiseReduction] = useState(true)
       const [cloning, setCloning] = useState(false)
 
       const [text, setText] = useState('')
       const [voiceId, setVoiceId] = useState('')
       const [synthesizing, setSynthesizing] = useState(false)
       const [result, setResult] = useState(null)
+
+      const [asrFile, setAsrFile] = useState(null)
+      const [asrLanguage, setAsrLanguage] = useState('')
+      const [asrResult, setAsrResult] = useState(null)
+      const [transcribing, setTranscribing] = useState(false)
+      const [copiedAsr, setCopiedAsr] = useState(false)
 
       const refresh = useCallback(async () => {
         setError('')
@@ -270,6 +283,7 @@ window.__ModuleLoader__.load({
             filename: file.name,
           })
           if (previewText.trim()) query.set('previewText', previewText.trim())
+          query.set('noiseReduction', noiseReduction ? '1' : '0')
           const data = await request(`/clone?${query.toString()}`, {
             method: 'POST',
             headers: { 'content-type': file.type || 'application/octet-stream' },
@@ -307,6 +321,45 @@ window.__ModuleLoader__.load({
           setError(String((problem && problem.message) || problem))
         } finally {
           setSynthesizing(false)
+        }
+      }
+
+      const transcribe = async () => {
+        setError('')
+        setNotice('')
+        if (!asrFile) {
+          setError('先选择一个音频文件（mp3 / aac / opus / wav / m4a，≤500 秒、≤50MB）。')
+          return
+        }
+        setTranscribing(true)
+        try {
+          const buffer = await asrFile.arrayBuffer()
+          const query = new URLSearchParams({ filename: asrFile.name })
+          if (asrLanguage.trim()) query.set('language', asrLanguage.trim())
+          const data = await request(`/transcribe?${query.toString()}`, {
+            method: 'POST',
+            headers: { 'content-type': asrFile.type || 'application/octet-stream' },
+            body: buffer,
+          })
+          setAsrResult({ ...data, name: asrFile.name })
+          setAsrFile(null)
+        } catch (problem) {
+          setError(String((problem && problem.message) || problem))
+        } finally {
+          setTranscribing(false)
+        }
+      }
+
+      const copyTranscript = () => {
+        if (!asrResult) return
+        const done = () => {
+          setCopiedAsr(true)
+          setTimeout(() => setCopiedAsr(false), 1400)
+        }
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(asrResult.text).then(done, done)
+        } else {
+          done()
         }
       }
 
@@ -388,8 +441,19 @@ window.__ModuleLoader__.load({
             value: previewText,
             onChange: (event) => setPreviewText(event.target.value),
           }),
+          h('label', {
+            style: { display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: tone.label2, marginBottom: 10, cursor: 'pointer' },
+            title: '传给 /v1/voice_clone 的 need_noise_reduction，默认开启',
+          },
+            h('input', {
+              type: 'checkbox',
+              checked: noiseReduction,
+              onChange: (event) => setNoiseReduction(Boolean(event.target.checked)),
+            }),
+            '降噪（过滤样本底噪，默认开启）',
+          ),
           h('button', { style: s.primary, onClick: clone, disabled: cloning }, cloning ? '复刻中…' : '开始复刻'),
-          h('div', { style: s.hint }, '样本要求：mp3 / m4a / wav，10 秒到 5 分钟，不超过 20MB。复刻后会自动生成一条试听音频。'),
+          h('div', { style: s.hint }, '样本要求：mp3 / m4a / wav，10 秒到 5 分钟，不超过 20MB。复刻后试听用的是复刻接口自带的音频，只按字符计费，不会产生 9.9 元音色费；等第一次正式合成该音色时才收。'),
         ),
 
         h(
@@ -447,6 +511,44 @@ window.__ModuleLoader__.load({
                   `${(result.durationMs / 1000 || 0).toFixed(1)} 秒 · ${result.characters || 0} 字符 · ${result.path}`),
               )
             : null,
+        ),
+
+        h(
+          'div',
+          { style: s.card },
+          h('div', { style: s.h2 }, '音频转文字（ASR）'),
+          h(
+            'div',
+            { style: { ...s.row, marginBottom: 8 } },
+            h('input', {
+              type: 'file',
+              accept: 'audio/*,video/mp4',
+              onChange: (event) => setAsrFile(event.target.files && event.target.files[0] ? event.target.files[0] : null),
+              style: { fontSize: 12, color: tone.label2, maxWidth: 260 },
+            }),
+            h('input', {
+              style: { ...s.input, flex: '0 0 150px' },
+              placeholder: '语种（留空自动）',
+              value: asrLanguage,
+              onChange: (event) => setAsrLanguage(event.target.value),
+            }),
+          ),
+          h(
+            'div',
+            { style: s.row },
+            h('button', { style: s.primary, onClick: transcribe, disabled: transcribing }, transcribing ? '转写中…' : '开始转写'),
+            asrResult ? h('button', { style: s.link, onClick: copyTranscript }, copiedAsr ? '已复制' : '复制结果') : null,
+          ),
+          asrResult
+            ? h(
+                'div',
+                { style: { marginTop: 10 } },
+                h('textarea', { style: { ...s.area, minHeight: 130 }, readOnly: true, value: asrResult.text }),
+                h('div', { style: { ...s.hint, wordBreak: 'break-all' } },
+                  `${asrResult.name || ''} · ${((asrResult.durationMs || 0) / 1000).toFixed(1)} 秒`),
+              )
+            : null,
+          h('div', { style: s.hint }, '返回纯文本。支持 mp3 / aac / opus / wav / m4a，单次 ≤500 秒、≤50MB；不填语种时自动识别主要语言并处理中英混说。'),
         ),
 
         notice ? h('div', { style: s.ok }, notice) : null,

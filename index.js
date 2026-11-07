@@ -16,6 +16,7 @@ export const inject = ['tools']
 
 const API_BASE = 'https://api.minimax.cn'
 const DEFAULT_MODEL = 'speech-2.8-hd'
+const ASR_MODEL = 'asr-1.0'
 const TTS_MODELS = [
   'speech-2.8-hd',
   'speech-2.8-turbo',
@@ -142,6 +143,34 @@ async function uploadAudio(apiKey, bytes, filename, purpose, signal) {
   return fileId
 }
 
+/**
+ * 下载 /v1/voice_clone 响应里的 demo_audio 试听音频。
+ *
+ * 这段试听是复刻接口自带的行为，只按字符数收 T2A 费用；官方文档明确它
+ * 「不包含在本接口内的试听行为」之外，因此不会激活音色、也不会触发 9.9 元复刻费。
+ * 拿不到 demo_audio 时返回 null（调用方按“无试听”处理），而不是回退去合成。
+ */
+async function downloadDemoAudio(cloneResponse, signal) {
+  const url = cloneResponse && (cloneResponse.demo_audio || (cloneResponse.data && cloneResponse.data.demo_audio))
+  if (typeof url !== 'string' || !url) return null
+  const res = await fetch(url, { signal })
+  if (!res.ok) return null
+  const bytes = Buffer.from(await res.arrayBuffer())
+  if (!bytes.length) return null
+  const type = String(res.headers.get('content-type') || '').toLowerCase()
+  const ext = /wav/.test(type) ? 'wav' : /m4a|mp4|aac/.test(type) ? 'm4a' : 'mp3'
+  return { bytes, ext }
+}
+
+/** 把 query/字符串参数解析成 boolean；缺省返回 undefined，交给下游用默认值。 */
+function parseFlag(value) {
+  if (value === undefined || value === null || value === '') return undefined
+  const text = String(value).trim().toLowerCase()
+  if (['1', 'true', 'yes', 'on'].includes(text)) return true
+  if (['0', 'false', 'no', 'off'].includes(text)) return false
+  return undefined
+}
+
 /* ------------------------------------------------------------ the service */
 
 function createVoice(ctx, config) {
@@ -199,6 +228,20 @@ function createVoice(ctx, config) {
       durationMs: entry.durationMs ?? null,
       previewPath: entry.previewFile ? join(audioDir, entry.previewFile) : null,
       sampleName: entry.sampleName || null,
+      // false = 只在 MiniMax 侧登记，还没用它做过正式合成，9.9 元音色费尚未产生。
+      activated: entry.activated !== false,
+    }
+  }
+
+  /** 音色第一次正式合成后会被 MiniMax 激活，本地标记一下便于界面提示。 */
+  async function markActivated(voiceId) {
+    try {
+      await mutateRegistry((registry) => {
+        const entry = registry.voices.find((item) => item.voiceId === voiceId)
+        if (entry) entry.activated = true
+      })
+    } catch {
+      /* 标记失败不影响合成结果 */
     }
   }
 
@@ -282,6 +325,8 @@ function createVoice(ctx, config) {
         dataDir,
         defaultModel,
         voiceCount: registry.voices.length,
+        // 标记当前加载的是“试听走 demo_audio、不触发 9.9 元”的版本
+        previewMode: 'demo_audio',
       }
     },
 
@@ -298,8 +343,9 @@ function createVoice(ctx, config) {
     },
 
     /**
-     * 复刻一个音色：上传样本 → /v1/voice_clone → 立刻合成一次试听并落盘。
-     * 试听这一步同时把音色“激活”，否则 /v1/get_voice 查不到它。
+     * 复刻一个音色：上传样本 → /v1/voice_clone → 落盘接口自带的 demo_audio 试听。
+     * 注意这里不会调用 /v1/t2a_v2：那会被算作首次合成，进而产生 9.9 元音色复刻费。
+     * 音色此时在 MiniMax 侧仍是未激活状态，等第一次真正合成时才激活并计费。
      */
     async clone(request) {
       const apiKey = await requireApiKey()
@@ -332,25 +378,30 @@ function createVoice(ctx, config) {
         cloneBody.clone_prompt = { prompt_audio: promptFileId, prompt_text: String(request.promptText || '') }
       }
       if (typeof request.accuracy === 'number') cloneBody.accuracy = request.accuracy
-      if (typeof request.needNoiseReduction === 'boolean') cloneBody.need_noise_reduction = request.needNoiseReduction
+      // 默认开启降噪：只在显式传 false 时关掉
+      cloneBody.need_noise_reduction = request.needNoiseReduction === false ? false : true
 
-      await callJson(apiKey, '/v1/voice_clone', cloneBody, signal)
+      const cloneResponse = await callJson(apiKey, '/v1/voice_clone', cloneBody, signal)
 
-      const preview = await synthesizeOnce(apiKey, { voiceId, text: previewText, model }, signal)
+      // 试听音频取复刻接口自带的 demo_audio，不再额外调 /v1/t2a_v2：
+      // 那次合成会被算作“首次使用该音色”，从而触发 9.9 元音色复刻费。
+      const demo = await downloadDemoAudio(cloneResponse, signal)
       await fsp.mkdir(audioDir, { recursive: true })
-      const previewFile = `${voiceId}.mp3`
-      await fsp.writeFile(join(audioDir, previewFile), preview.bytes)
+      const previewFile = demo ? `${voiceId}.${demo.ext}` : null
+      if (previewFile) await fsp.writeFile(join(audioDir, previewFile), demo.bytes)
 
       const entry = {
         voiceId,
         name: displayName,
         model,
         createdAt: new Date().toISOString(),
-        durationMs: preview.durationMs,
+        durationMs: null,
         previewFile,
         sampleName: filename,
         sampleBytes: bytes.length,
         previewText,
+        // 复刻只登记音色，9.9 元在首次正式合成时才计费
+        activated: false,
       }
       await mutateRegistry((registry) => {
         registry.voices = registry.voices.filter((item) => item.voiceId !== voiceId)
@@ -365,6 +416,8 @@ function createVoice(ctx, config) {
       const voiceId = request.voiceId || (await readRegistry()).voices[0]?.voiceId
       if (!voiceId) throw new Error('还没有任何音色：请先复刻一个，或传入系统音色 ID')
       const result = await synthesizeOnce(apiKey, { ...request, voiceId }, request.signal)
+      // 第一次用这个音色正式合成，会在 MiniMax 侧激活它并产生 9.9 元音色费，记下来
+      await markActivated(voiceId)
       const target = request.outPath
         ? await resolveInputPath(request.outPath, request.exec)
         : await saveOutput(result.bytes, result.format)
@@ -381,6 +434,59 @@ function createVoice(ctx, config) {
         model: request.model || defaultModel,
         traceId: result.traceId,
       }
+    },
+
+    /** 用 MiniMax ASR（asr-1.0）把音频转写成纯文本。单次上限 500 秒 / 50MB。 */
+    async transcribe(request) {
+      const apiKey = await requireApiKey()
+      const signal = request.signal
+      let bytes = request.bytes
+      let filename = request.filename || 'audio.mp3'
+      if (!bytes) {
+        if (!request.audioPath) throw new Error('缺少音频文件路径 audio_path')
+        const source = await resolveInputPath(request.audioPath, request.exec)
+        bytes = await fsp.readFile(source)
+        filename = basename(source)
+      }
+      if (!bytes || !bytes.length) throw new Error('音频文件是空的')
+
+      const form = new FormData()
+      form.append('model', ASR_MODEL)
+      form.append('file', new Blob([bytes], { type: mimeOf(filename) }), filename)
+      form.append('response_format', 'json')
+      const language = String(request.language || '').trim()
+      if (language) form.append('language', language)
+
+      const res = await fetch(`${API_BASE}/v1/speech_to_text`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${apiKey}` },
+        body: form,
+        signal,
+      })
+      const raw = await res.text()
+      if (!res.ok) throw new Error(`转写失败（HTTP ${res.status}）：${raw.slice(0, 400)}`)
+
+      let data
+      try {
+        data = JSON.parse(raw)
+      } catch {
+        throw new Error(`转写返回的不是 JSON：${raw.slice(0, 200)}`)
+      }
+      if (data && data.type === 'error') throw new Error(`转写失败：${raw.slice(0, 400)}`)
+
+      const result = {
+        text: String(data.text || ''),
+        durationMs: typeof data.duration === 'number' ? Math.round(data.duration * 1000) : null,
+        traceId: data.trace_id || null,
+      }
+
+      if (request.outPath) {
+        const target = await resolveInputPath(request.outPath, request.exec)
+        await fsp.mkdir(join(target, '..'), { recursive: true })
+        await fsp.writeFile(target, result.text, 'utf8')
+        result.path = target
+      }
+      return result
     },
 
     /** 从本地注册表删除一个音色（不删除 MiniMax 账号侧的音色）。 */
@@ -507,6 +613,7 @@ function createVoice(ctx, config) {
           name: query.get('name') || '未命名音色',
           model: query.get('model') || undefined,
           previewText: query.get('previewText') || undefined,
+          needNoiseReduction: parseFlag(query.get('noiseReduction')),
         })
         sendJson(res, 200, { voice })
         return
@@ -518,6 +625,20 @@ function createVoice(ctx, config) {
         sendJson(res, 200, {
           ...result,
           url: `${ROUTE_PREFIX}/output/${basename(result.path)}`,
+        })
+        return
+      }
+      if (method === 'POST' && path === '/transcribe') {
+        const bytes = await readBody(req)
+        const result = await api.transcribe({
+          bytes,
+          filename: query.get('filename') || 'audio.mp3',
+          language: query.get('language') || undefined,
+        })
+        sendJson(res, 200, {
+          text: result.text,
+          durationMs: result.durationMs,
+          traceId: result.traceId,
         })
         return
       }
@@ -584,6 +705,7 @@ const VOICE_OUTPUT = {
     model: { type: 'string', description: '复刻使用的模型' },
     preview_path: { type: 'string', description: '试听音频的本地路径' },
     duration_ms: { type: 'number', description: '试听音频时长（毫秒）' },
+    activated: { type: 'boolean', description: '是否已激活（false 表示 9.9 元音色费尚未产生）' },
   },
   required: ['voice_id', 'name', 'model', 'preview_path'],
 }
@@ -592,7 +714,7 @@ function cloneTool(voice) {
   return {
     name: 'minimax_voice_clone',
     description:
-      '用一段 10 秒到 5 分钟的真人音频复刻音色（mp3/m4a/wav，≤20MB）。成功后返回持久化的 voice_id 和一段试听音频路径，后续可用 minimax_tts 或 minimaxVoice 服务使用该音色。',
+      '用一段 10 秒到 5 分钟的真人音频复刻音色（mp3/m4a/wav，≤20MB）。成功后返回持久化的 voice_id 和一段试听音频路径。试听取自复刻接口自带的 demo_audio，只按字符计费，不会触发 9.9 元音色费（该费用在第一次用它正式合成时才产生）。后续可用 minimax_tts 或 minimaxVoice 服务使用该音色。',
     parameters: {
       type: 'object',
       additionalProperties: false,
@@ -603,6 +725,7 @@ function cloneTool(voice) {
         model: { type: 'string', enum: TTS_MODELS, description: `复刻模型，默认 ${DEFAULT_MODEL}` },
         prompt_audio_path: { type: 'string', description: '可选：示例音频路径（短于 8 秒），用于增强相似度' },
         prompt_text: { type: 'string', description: '示例音频里说的内容' },
+        need_noise_reduction: { type: 'boolean', description: '是否对样本降噪，默认 true（开启）' },
       },
       required: ['audio_path', 'name'],
     },
@@ -615,6 +738,7 @@ function cloneTool(voice) {
             `已复刻音色「${value.name}」`,
             `voice_id: ${value.voice_id}`,
             `试听: ${value.preview_path}`,
+            value.activated === false ? '状态: 未激活（试听免费，首次正式合成才收 9.9 元音色费）' : '',
             value.duration_ms ? `试听时长: ${(value.duration_ms / 1000).toFixed(1)} 秒` : '',
           ].filter(Boolean).join('\n'),
         },
@@ -626,6 +750,7 @@ function cloneTool(voice) {
         name: args.name,
         model: args.model,
         previewText: args.preview_text,
+        needNoiseReduction: args.need_noise_reduction,
         promptAudioPath: args.prompt_audio_path,
         promptText: args.prompt_text,
         exec,
@@ -637,6 +762,7 @@ function cloneTool(voice) {
         model: result.model,
         preview_path: result.previewPath || '',
         duration_ms: result.durationMs ?? 0,
+        activated: result.activated !== false,
       }
     },
   }
@@ -762,6 +888,61 @@ function ttsTool(voice) {
   }
 }
 
+function transcribeTool(voice) {
+  return {
+    name: 'minimax_transcribe',
+    description:
+      '用 MiniMax 语音识别（asr-1.0）把音频转写成文本，返回纯文本。支持多语种混合识别，单次 ≤500 秒、≤50MB。',
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        audio_path: { type: 'string', description: '音频文件路径（mp3 / aac / opus / wav / m4a）' },
+        language: { type: 'string', description: '语种，例如 zh、en；留空自动识别并支持中英混说' },
+        out_path: { type: 'string', description: '可选：把转写出的纯文本写到这个文件' },
+      },
+      required: ['audio_path'],
+    },
+    output: {
+      schema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          text: { type: 'string', description: '转写出的文本' },
+          duration_ms: { type: 'number', description: '音频时长（毫秒）' },
+          path: { type: 'string', description: '写出的文件路径' },
+        },
+        required: ['text'],
+      },
+      render: (_args, value) => [
+        {
+          type: 'text',
+          text: [
+            `转写完成（${((value.duration_ms || 0) / 1000).toFixed(1)} 秒）`,
+            value.path ? `文件: ${value.path}` : '',
+            '',
+            value.text,
+          ].filter(Boolean).join('\n'),
+        },
+      ],
+    },
+    async execute(args, exec) {
+      const result = await voice.api.transcribe({
+        audioPath: args.audio_path,
+        language: args.language,
+        outPath: args.out_path,
+        exec,
+        signal: exec.signal,
+      })
+      return {
+        text: result.text,
+        duration_ms: result.durationMs ?? 0,
+        path: result.path || '',
+      }
+    },
+  }
+}
+
 /* ------------------------------------------------------------------- apply */
 
 export function apply(ctx, config = {}) {
@@ -769,7 +950,7 @@ export function apply(ctx, config = {}) {
 
   ctx.provide('minimaxVoice', voice.api)
 
-  for (const tool of [cloneTool(voice), listTool(voice), ttsTool(voice)]) {
+  for (const tool of [cloneTool(voice), listTool(voice), ttsTool(voice), transcribeTool(voice)]) {
     ctx.effect(() => ctx.tools.register(tool), `minimax-voice: tool ${tool.name}`)
   }
 
@@ -791,7 +972,7 @@ export function apply(ctx, config = {}) {
   }
 
   try {
-    ctx.logger.info('minimax-voice ready: minimaxVoice service, 3 tools, data at %s', voice.dataDir)
+    ctx.logger.info('minimax-voice ready: minimaxVoice service, 4 tools, data at %s', voice.dataDir)
   } catch {
     /* logger unavailable in this composition */
   }
