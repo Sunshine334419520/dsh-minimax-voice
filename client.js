@@ -3,7 +3,7 @@
  * 渲染在 设置 → MiniMax 音色：配置 API Key、复刻音色、试听、复制 voice_id、文本转音频。
  */
 window.__ModuleLoader__.load({
-  id: '@local/dsh-minimax-voice',
+  id: 'dsh-minimax-voice',
   factory(require) {
     const React = require('react')
     const h = React.createElement

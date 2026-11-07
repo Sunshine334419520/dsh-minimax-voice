@@ -1,4 +1,4 @@
 - insert:
     - id: minimax-voice
-      name: '@local/dsh-minimax-voice'
+      name: 'dsh-minimax-voice'
       config: {}
